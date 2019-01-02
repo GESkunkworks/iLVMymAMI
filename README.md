@@ -187,4 +187,4 @@ Thanks to Alex Y from AWS support for helping with some blockers in this process
 
 
 TODO: Add some sysprep steps suggested by [Bob Plankers](https://lonesysadmin.net/2013/03/26/preparing-linux-template-vms/).
-
+TODO: Add a [fhid](https://github.com/GESkunkworks/fhid) POST at the end of the auto script so we get image registration from this "out of band" image creation process.
