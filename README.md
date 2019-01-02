@@ -71,13 +71,120 @@ Disk identifier: 0x61cdaa0a
 Here we'll carve out the LVM partition with our desired partitions for `/home`, `/var`, and `/`.
 
 1. Make sure you have LVM utilities installed by running `yum install lvm2 -y`
-1. 
+1. Set your LVM partition to be a "physical" volume for LVM to use by running `pvcreate /dev/nvme0n1p2`
+1. Now add that PV as part of a new volume group by running `vgcreate vg1 /dev/nvme0n1p2`
+   * You don't have to use `vg1` as the name. You can name your volume group anything you like.
+1. Now we can set up our logical volumes with names and specific sizes. You can set hard sizes (e.g., 10GB) but in this example I'm going to set the logical volumes up as percentages of free space on the total volume group.
+   1. `lvcreate -l 30%VG -n root vg1`
+   1. `lvcreate -l 40%VG -n var vg1`
+   1. `lvcreate -l 30%VG -n home vg1`
+1. Now we'll make the filesystems on the boot volume and the new logical volumes. In this example we'll use xfs. If you wan tto use ext4 or something that's fine but some of the later commands will be different. 
+   1. `mkfs.xfs /dev/nvme0n1p1 -L /boot`
+      * NOTE: Make sure you add the filesystem on the first partition that we're using for boot and not the second that we're using for LVM. 
+   1. `mkfs.xfs /dev/vg1/root -L /`
+      * Some systems honor the "label" on the filesystem so it's nice to add. 
+   1. `mkfs.xfs /dev/vg1/var`
+   1. `mkfs.xfs /dev/vg1/home`
 
-... To be continued
+That should be it for partitioning and filesystem creation. Now we'll move on to cloning the host OS to the new volume. 
+
+#### Cloning the OS to the New Drive
+Now we'll work on setting up the new drive as an operating system disk with all the proper files and MBR that it needs to boot on it's own. 
+
+1. First create your mount points and start mounting the logical volumes to these mount point so we can start interacting with the filesystem.
+   1. `mkdir -p /mnt`
+   1. `mount /dev/vg1/root /mnt`
+   1. `mkdir -p /mnt/var`
+   1. `mount /dev/vg1/var /mnt/var`
+   1. `mkdir -p /mnt/home`
+   1. `mount /dev/vg1/home /mnt/home`
+   1. `mkdir -p /mnt/boot`
+   1. `mount /dev/nvme0n1p1 /mnt/boot`
+1. Now we're going to copy over all our files from the host operating system to the new drive. We'll use the `rsync` command to do this and we'll make sure to exclude some special paths such as `/dev` and our own `/mnt` point!
+   1. `rsync -axHAX --exclude='{"/dev/*","/proc/*","/sys/*","/tmp/*","/run/*","/mnt/*","/media/*","/srv/*","/newsysroot"}' / /mnt/`
+1. Now that we have the raw files on disk we need to prepare the target volume so that we can jump into it with `chroot` and use some executables on the new system to build our bootloader image and run grub to install the MBR on the new disk. We'll start by mapping some important paths from the host operating system. These are not normal mounts, they're bind mounts to the host. These will give the environment living on the "guest" disk access to devices on the host. 
+   1. `mkdir -p /mnt/proc`
+   1. `mount -o bind /proc /mnt/proc`
+   1. `mkdir -p /mnt/sys`
+   1. `mount -o bind /sys /mnt/sys`
+   1. `mkdir -p /mnt/dev`
+   1. `mount -o bind /dev /mnt/dev`
+1. Now we need to "jump into" the new OS environment by running `chroot`. From there we'll run some commands as if we're booted into the OS on that volume. 
+   1. Run `chroot /mnt`
+   1. Run `dracut -f -v` to build a new bootloader image. dracut will automatically install this to `/boot` for you.
+   1. Run `grub2-mkconfig -o /boot/grub2/grub.cfg` to build a new grub bootloader config. Grub will automatically install this to `/boot` for you. 
+   1. Run `grub2-install /dev/nvme0n1` to have grub build your MBR for you. Make sure it's going to the base volume and not a partition. This is a very important step. 
+1. Now we can exit out of the chroot environment by running `exit`
+1. Now we can build out the `/etc/fstab` file on the guest disk so that all of the proper logical volumes get mounted to the right places when the disk boots.
+1. Edit the fstab file by running your favorite editor on it like `vi /mnt/etc/fstab`. You'll need to make sure you an entry for all of your volumes: `/`, `/boot`, `/var`, and `/home`. The UUID for each has to match what the volume has listed for UUID's. You can see the UUIDs for your volumes by running the `blkid` command and taking note of them. Make your `/mnt/etc/fstab` look like the one in the below example. 
+   * For example, the root mount point is found by looking up the UUID for the `/dev/mapper/vg1-root` device from the blkid output. Take that UUID and make a corresponding root mount in fstab
+      * `UUID=29c5a90e-eb83-4f16-8756-0787245d541e /                       xfs     defaults        0 0`
+   * Repeat for the other 3 volumes.
+1. CentOS 7 comes with SELinux in Enforcing mode by default, so AWS suggeste adding /.autorelabel file to relabel all files upon reboot (you can disregard this step if SELinux is not active)
+   1. `touch /.autorelabel`
+1. Now unmount everything by running `mount -R /mnt` followed by `vgchange -an vg1` and shutdown with `shutdown -h now`
+
+Example output from `blkid` command:
+```
+[gecloud@ip-10-230-204-134 ~]$ blkid
+/dev/nvme0n1p1: LABEL="/boot" UUID="f296f0ec-6c85-4d54-a6f6-ba6500a70e8a" TYPE="xfs"
+/dev/nvme0n1p2: UUID="FzqWs7-RGYD-uVky-BfMc-89xb-sTWm-aowMQ0" TYPE="LVM2_member"
+/dev/mapper/vg1-root: LABEL="/" UUID="29c5a90e-eb83-4f16-8756-0787245d541e" TYPE="xfs"
+/dev/mapper/vg1-var: UUID="74cbe4b7-5c7d-4583-8298-0fd9b17fd2fc" TYPE="xfs"
+/dev/mapper/vg1-home: UUID="5274a520-44a1-4b76-ae11-33c19cb4bbbd" TYPE="xfs"
+```
+
+Example `/mnt/etc/fstab` file:
+```
+UUID=29c5a90e-eb83-4f16-8756-0787245d541e /                       xfs     defaults        0 0
+UUID=5274a520-44a1-4b76-ae11-33c19cb4bbbd /home                       xfs     defaults        0 0
+UUID=74cbe4b7-5c7d-4583-8298-0fd9b17fd2fc /var                       xfs     defaults        0 0
+UUID=f296f0ec-6c85-4d54-a6f6-ba6500a70e8a /boot                       xfs     defaults        0 0
+```
+
+#### Test the New Volume
+Now we have what we think is a working volume. Let's launch an instance and test. If you already know it works and just want to create an AMI just skip this and go to the "Make an AMI" section below.
+
+1. Go to the AWS EC2 console find your builder instance from the above steps and detach your new volume that you've been working on so diligently. Now your volume is a free agent that can be attached to any instance. 
+1. Launch a new instance from any AMI you choose. It won't really matter since we're going to detach whatever root volume it has anyway. 
+1. Once the instance is launched, shut it down and detach the root volume. 
+1. Now attach your other LVM partitioned volume to the new instance and make sure to map it to the `/dev/sda1` device. This is important as it lets AWS know you want to use this volume as the root or boot volume. 
+1. Start the new instance.
+1. If everything worked properly you should be able to SSH to the new instance and see that you're operating on an LVM disk now!
+
+Output of `df -h`:
+```
+[gecloud@ip-10-230-204-134 ~]$ df -h
+Filesystem            Size  Used Avail Use% Mounted on
+/dev/mapper/vg1-root   15G  957M   14G   7% /
+devtmpfs              3.7G     0  3.7G   0% /dev
+tmpfs                 3.7G     0  3.7G   0% /dev/shm
+tmpfs                 3.7G   17M  3.7G   1% /run
+tmpfs                 3.7G     0  3.7G   0% /sys/fs/cgroup
+/dev/mapper/vg1-home   15G   34M   15G   1% /home
+/dev/mapper/vg1-var    20G  170M   20G   1% /var
+/dev/nvme0n1p1        497M  228M  270M  46% /boot
+tmpfs                 753M     0  753M   0% /run/user/1001
+```
+
+#### Make an AMI
+Now you can take your new volume and use to to make an AMI so you can mass produce your work.
+
+1. Perform the same steps yo did above but this time skip the "Test the New Volume"  section. 
+1. Find your volume in the console and right click and "Create Snapshot". You can give it a description or tags if you want.
+1. Once the snapshot is done creating find it in the Snapshots console. Right click on it and select "Create Image". Use the following options:
+   * Architecture: `x86_64`
+   * Root device name: `/dev/sda1`
+   * Virtualization Type: `Hardware-assisted virtualization`
+1. Add whatever name and description you want and click "Create". You can add more tags later. 
+1. Once the image is registered try and use it to launch a new instance.
+
+NOTE: If you launched the instance with a drive larger than th eroot volume specified in the AMI then the normal cloud-init process that usually resizes the disk won't work with LVM. You'll have to expand the filesystem manually. Check out the example script in `samples/vgextender.sh`. You could run this as part of the userdata process or something.
 
 
 ## Credit
 Thanks to Alex Y from AWS support for helping with some blockers in this process.
 
-Credit to [Bob Plankers](https://lonesysadmin.net/2013/03/26/preparing-linux-template-vms/) for a lot of these tips.
+
+TODO: Add some sysprep steps suggested by [Bob Plankers](https://lonesysadmin.net/2013/03/26/preparing-linux-template-vms/).
 
