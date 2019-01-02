@@ -128,5 +128,5 @@ sleep 3
 # unmap the VG on the host
 vgchange -an vg1
 
-# and shutdown
+# shut yourself down
 shutdown -h now

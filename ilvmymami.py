@@ -13,8 +13,7 @@ options.
 Usage:
     python ilvmymami.py <config-file>
 
-Example:
-    python ilvmymami.py config-sample.yml
+Example: python ilvmymami.py config-sample.yml
 
 
 '''
@@ -105,7 +104,7 @@ class InstanceConfig(BaseClass):
 	userdata = ""
 	try:
 	    with open(self.userdata_script,'rb') as f:
-		self.userdata = "\n".join(f.readlines())
+		self.userdata = "".join(f.readlines())
 	except:
 	    self.userdata = ""
 
@@ -165,7 +164,7 @@ def poll_until_stopped(client, instanceId):
         print("\tState = %s" % state)
         if state == "stopped":
             break
-        time.sleep(10)
+        time.sleep(20)
 
 def parse_config(filename):
     """
@@ -205,11 +204,21 @@ def image(client, snapshot_id, cobj):
     """
     description = ""
     name = ""
-    for tag in tags:
+    foundname = False
+    for tag in cobj.ami.ami_tags:
+	if tag.get("Key") == "Name":
+	    foundname = True
+            name = tag.get("Value")
         if tag.get("Key") == "Description":
             description = tag.get("Value")
-        if tag.get("Key") == "Name":
-            name = tag.get("Value")
+    if not foundname:
+	timestamp = datetime.datetime.strftime(datetime.datetime.now(), cobj.ami.ami_name_timestamp_format) 
+        name = cobj.ami.ami_name_prefix + timestamp
+	nametag = {
+	    "Key": "Name",
+	    "Value": name
+	}
+	cobj.ami.ami_tags.append(nametag)
     response = client.register_image(
             Architecture='x86_64',
             BlockDeviceMappings=[
@@ -229,22 +238,11 @@ def image(client, snapshot_id, cobj):
     )
     print response
     imageId = response.get("ImageId")
-    foundname = False
-    for tag in cobj.ami.ami_tags:
-	if tag.get("Key") == "Name":
-	    foundname = True
-    if not foundname:
-	timestamp = datetime.datetime.strftime(datetime.datetime.now(), cobj.ami.ami_name_timestamp_format) 
-	nametag = {
-	    "Key": "Name",
-	    "Value": cobj.ami.ami_name_prefix + timestamp
-	}
-	cobj.ami.ami_tags.append(nametag)
     response = client.create_tags(
             Resources=[
                 imageId
             ],
-            Tags=tags
+            Tags=cobj.ami.ami_tags
     )
     return imageId
 
@@ -308,6 +306,16 @@ def create_instance(client, cobj):
     )
     return instanceId
 
+def get_volume_id(client, instanceId):
+    response = client.describe_instances(
+            InstanceIds=[instanceId]
+            )
+    vol_id = ""
+    for vol in response.get('Reservations')[0].get('Instances')[0].get("BlockDeviceMappings"):
+        if vol.get("DeviceName") == "/dev/sdf":
+            vol_id = vol.get("Ebs").get("VolumeId")
+    return vol_id
+
 def main():
     if len(sys.argv) < 1:
         print "Usage: python %s <config-file>" % sys.argv[0]
@@ -318,20 +326,31 @@ def main():
     except Exception as err:
         print("Error processing config, exiting: " + str(err))
 	sys.exit(1)
+    print("Successfully parsed config. Establishing boto3 session...")
 
     # now set up session and client
     session = boto3.session.Session(profile_name=cobj.creds_profile_name)
     client = session.client('ec2')
 
+    print("Creating builder instance...")
     # now create the builder instance
     instanceId = create_instance(client, cobj)
     # NOTE: It is assumed that the userdata script will stop the instance
     # when it's done performing the partitioning. 
+    print("Created instance with InstanceID: %s" % instanceId)
     poll_until_stopped(client, instanceId)
 
-    # now create a snapshot and register ami
-    sid = snap(client, vol_id, cobj)
-    iid = image(client, sid, cobj)
+    print("Grabbing volume id...")
+    vol_id = get_volume_id(client, instanceId)
+    print("Got volume id: %s" % vol_id)
 
+    # now create a snapshot and register ami
+    print("Now attempting to snapshot volume and create AMI...")
+    sid = snap(client, vol_id, cobj)
+    print("Created Snapshot with id: %s" % sid)
+    iid = image(client, sid, cobj)
+    print("Created AMI with id: %s" % iid)
+
+    print("Success!")
 if __name__ == "__main__":
     main()
