@@ -137,6 +137,34 @@ class Config(BaseClass):
         print("ami")	
         print self.ami.dumpself()
 
+def poll_until_completed(client, snapshotId):
+    """
+    Continuously checks on a given snapshot ID to see if
+    it's done yet. Blocks until stopped. 
+    """
+    max_polling_attempts = 200
+    counter = 0
+    while True:
+        counter += 1
+        if counter > max_polling_attempts:
+            break
+        print("Polling %d of %d" % (counter, max_polling_attempts))
+        print("\tGetting status of snapshot: %s" % snapshotId)
+        state = "unknown"
+        try:
+            response = client.describe_snapshots(
+                    SnapshotIds=[
+                            snapshotId,
+                    ]
+            )
+            state = response.get("Snapshots")[0].get("State")
+        except Exception as er:
+            print("Exception describing snapshots " + str(er))
+
+        print("\tState = %s" % state)
+        if state == "completed" or state == "error":
+            break
+        time.sleep(10)
 
 def poll_until_stopped(client, instanceId):
     """
@@ -346,9 +374,12 @@ def main():
     print("Got volume id: %s" % vol_id)
 
     # now create a snapshot and register ami
-    print("Now attempting to snapshot volume and create AMI...")
+    print("Now attempting to snapshot volume...")
     sid = snap(client, vol_id, cobj)
     print("Created Snapshot with id: %s" % sid)
+    poll_until_completed(client, sid)
+    
+    print("Now attempting to register AMI...")
     iid = image(client, sid, cobj)
     print("Created AMI with id: %s" % iid)
 

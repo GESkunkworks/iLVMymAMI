@@ -17,7 +17,7 @@
     # the subnet to launch the builder instance in
     subnet: "subnet-1234567"
     # an example script is provided in this repo
-    userdata_script: "parter.sh"
+    userdata_script: "parter-centos.sh"
     # NOTE: it is assumed that the userdata script will
     # stop the instance at the end after it's done partitioning
     # the launch script will wait until it sees the instance stopped

@@ -21,11 +21,11 @@ python ilvmymami.py config.yml
 ```
 
 The script will attempt the following:
-1. create an instance with an additional volume with `parter.sh` as userdata
+1. create an instance with an additional volume with `parter-centos.sh` as userdata
 1. the userdata will attempt to prepare the additional volume as LVM and clone the builder instance's root volume to it and then shut down
 1. the script will then attempt to snapshot and register the volume as an AMI using tags you provide in the config file.
 
-Hopefully the above will work for you however it may be finicky. Below is an overview of the manual steps for the process.
+Hopefully the above will work for you however it may be finicky. Below is an overview of the manual steps for the process. 
 
 # Manual Run
 ## Prereqs
@@ -37,9 +37,42 @@ Hopefully the above will work for you however it may be finicky. Below is an ove
 1. Start the instance and SSH to it.
 
 ## Steps
+This will be a walkthrough of the steps in the `parter-centos.sh` script.
+
+#### Partition the New Drive
 1. First switch to root with `sudo su -`
 1. Run `fdisk -l` and find out what your new device name is. In my case it was `/dev/nvme1n1`. 
-1. Update the `TGTDEV` variable in the `parter.sh` script with the unpartitioned device name from above.
+1. Run `fdisk /dev/nvme1n1` to start partitioning the new attached volume.
+1. First set the drive as `msdos` mode by hitting `o`. The alternative is `gpt` which isn't covered in this guide.
+1. Hit `n` to create a new partition.
+1. Set it as partition 1 and hit Enter to accept the default start position.
+1. For the end position instead of using a sector we'll just say `+500M` to set a 500 MB partition.
+1. Make another new partition by hitting `n` and making it partition 2. Just hit enter twice in a row to have this one fill the remaining space on the drive.
+1. Now set the partition type to `Linux LVM` by hitting `t`, selecting partition 2, and setting the type code as `8e`
+1. Make partition 1 bootable by hitting `a` and selecting partition 1.
+1. You can print the results of the table by hitting `p`. (see sample output below)
+1. Write the partition table with `w` and then hit `q` to exit the partitioner.
+
+Sample partition table
+```
+Disk /dev/nvme0n1: 53.7 GB, 53687091200 bytes, 104857600 sectors
+Units = sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+Disk label type: dos
+Disk identifier: 0x61cdaa0a
+
+        Device Boot      Start         End      Blocks   Id  System
+/dev/nvme0n1p1   *        2048     1026047      512000   83  Linux
+/dev/nvme0n1p2         1026048    16777215     7875584   8e  Linux LVM
+```
+
+#### Setup LVM on the New Drive
+Here we'll carve out the LVM partition with our desired partitions for `/home`, `/var`, and `/`.
+
+1. Make sure you have LVM utilities installed by running `yum install lvm2 -y`
+1. 
+
 ... To be continued
 
 
