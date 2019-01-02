@@ -1,0 +1,54 @@
+---
+# sample config file to be used with the ilvmymami.py script
+- general:
+    # this is the entry in your ~/.aws/credentials file
+    # that will be used to get permissions to the account
+    creds_profile_name: "default"
+- builder_instance:
+    # the keypair name you want to use
+    key_name: "mykey"
+    # the AMI the builder instance will start from
+    # right now it's only been tested with very basic CentOS configs
+    starter_ami: "ami-9887c6e7"
+    # the security group to put on your instance
+    security_group: "sg-1234567"
+    # the type of instance to use as the builder
+    instance_type: "m5.large"
+    # the subnet to launch the builder instance in
+    subnet: "subnet-1234567"
+    # an example script is provided in this repo
+    userdata_script: "parter.sh"
+    # NOTE: it is assumed that the userdata script will
+    # stop the instance at the end after it's done partitioning
+    # the launch script will wait until it sees the instance stopped
+    # before creating snapshots and registering AMIs
+    root_volume_size_gb: 10
+    # this is the size of the root volume the builder instance will use
+    # make sure your starter AMI will fit on it. 
+    builder_volume_size_gb: 8
+    # this is the size of the target volume that will get registered
+    # with your AMI. 
+    tags:
+      - contact: "rendicott@gmail.com"
+      - Name: "lvm-builder"
+      - env: "dev"
+      - preserve: "false"
+- ami:
+    ami_name_prefix: "Custom-CentOS7-Linux-HVM-LVM-" 
+    # see python timestamp package documentation
+    ami_name_timestamp_format: "%Y-%m-%d-%H-%M-%S" 
+    # NOTE: AMI name and "Name" tag will be prefix+timestamp from above
+    snapshot_tags:
+        # the snapshot will get a name tag just for audit
+        # clarity before being baked as AMI
+        - Name: "lvm-constructor-snapshot"
+    ami_tags:
+      - AMI_Version: "0.1.0.3"
+      - OS_Version: "CentOS"
+      - Description: "CentOS7 base plus security patches, centos is default user, LVM partitioned root, var, and home"
+      # NOTE: a "Name" tag will be auto added based on 
+      # the ami_name and timestamp. Any Name tag listed
+      # here will overwrite the auto-generated. 
+      
+...
+
